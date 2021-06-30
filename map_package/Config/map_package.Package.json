@@ -1,0 +1,10 @@
+{
+    "maps": [
+        {
+            "path": "/Game/map_package/Maps/highway", 
+            "name": "highway", 
+            "use_carla_materials": true
+        }
+    ], 
+    "props": []
+}
