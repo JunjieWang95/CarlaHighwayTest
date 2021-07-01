@@ -147,7 +147,7 @@ $X_0=3.5$ m
 
 # 代码使用说明
 
-测试场景代码主要在`CarlaHighwayTestEnv.py`文件中，已封装为gym接口。主车的规划控制部分代码参考了[链接](https://github.com/paulyehtw/Motion-Planning-on-CARLA)。`test_demo/test.py`文件提供了一个场景代码使用范例，并且包含基于D3QN算法训练出的权重，可直接在上述conda创建的虚拟环境中运行。使用步骤为：
+测试场景代码主要在`CarlaHighwayTestEnv.py`文件中，已封装为gym接口。主车的规划控制部分代码参考了[链接](https://github.com/paulyehtw/Motion-Planning-on-CARLA)。`test_demo/test.py`文件提供了一个场景代码使用范例，并且包含基于D3QN算法训练出的权重，可直接在上述conda创建的虚拟环境中运行，该权重下所有场景的测试结果在文件夹`test_demo/logdir`中。测试样例使用步骤为：
 
 1. 打开终端1，依次运行
 
