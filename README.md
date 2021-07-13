@@ -6,7 +6,10 @@
 
 ## (1) 直行遇本车道目标车辆
 
+<div align="center">
 <img src="images/clip_image001.png" width="500" alt="图1 逻辑场景1示例"/>
+<img src="images/scen1.gif" width="250">
+</div>
 
 <p align="center">图1 逻辑场景1示例</p>
 
@@ -24,7 +27,10 @@ $X_0=3.5$ m
 
 ## (2) 直行遇本车道目标车辆
 
+<div align="center">
 <img src="images/clip_image002.png" width="500" alt="图2 逻辑场景2示例"/>
+<img src="images/scen2.gif" width="250">
+</div>
 
 <p align="center">图2 逻辑场景2示例</p>
 
@@ -44,7 +50,10 @@ $X_0=3.5$ m
 
 ## (3) 三车道直行换道遇目标车道目标车辆
 
+<div align="center">
 <img src="images/clip_image003.png" width="500" alt="图3 逻辑场景3示例"/>/>
+<img src="images/scen3.gif" width="250">
+</div>
 
 <p align="center">图3 逻辑场景3示例</p>
 
@@ -68,7 +77,10 @@ $X_0=3.5$ m
 
 ## (4) 三车道直行遇前方低速车辆且相邻车道前方有车辆
 
+<div align="center">
 <img src="images/clip_image004.png" width="500" alt="图4 逻辑场景4示例"/>
+<img src="images/scen4.gif" width="250">
+</div>
 
 <p align="center">图4 逻辑场景4示例</p>
 
@@ -92,7 +104,10 @@ $X_0=3.5$ m
 
 ## (5) 直行遇前车切出后有慢速车辆
 
+<div align="center">
 <img src="images/clip_image005.png" width="500" alt="图5 逻辑场景5示例"/>
+<img src="images/scen5.gif" width="250">
+</div>
 
 <p align="center">图5 逻辑场景5示例</p>
 
