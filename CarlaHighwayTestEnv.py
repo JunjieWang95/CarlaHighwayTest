@@ -34,8 +34,8 @@ COLOR_WIHTE = (128, 128, 128)
 PIXELS_PER_METER = 12
 
 NUM_PATHS = 1
-BP_LOOKAHEAD_BASE = 8.0  # m
-BP_LOOKAHEAD_TIME = 0.8  # s
+BP_LOOKAHEAD_BASE = 15.0  # m 15.0 8.0
+BP_LOOKAHEAD_TIME = 1.0  # s 1.0 0.8
 PATH_OFFSET = 0.7  # m
 CIRCLE_OFFSETS = [-1.0, 1.0, 3.0]  # m
 CIRCLE_RADII = [1.5, 1.5, 1.5]  # m
@@ -306,6 +306,7 @@ class CarlaEnv(gym.Env):
             pixels_per_meter=PIXELS_PER_METER)
 
         self.actor_list = []
+        self.actor_dic = []
         self.hero = None
         self.sensor = None
         self.imu = None
@@ -327,6 +328,9 @@ class CarlaEnv(gym.Env):
         self.controller = None
         self.current_timestamp = 0.0
         self.prev_timestamp = 0.0
+        self.start_time = 0.0
+        self.end_time = 0.0
+        self.start_pos = 0.0
         self.count_frame = 0
         self.count_frame_time = 0
         self.count_step = 0
@@ -478,15 +482,16 @@ class CarlaEnv(gym.Env):
                 car_lane = self.other_lane_dic[self.scenario][car]
                 car_index = closest_index + self.scen_refer_dic[self.test_scen][car]
                 num_npcs += spawn_npc(car_lane, car_index, multi_wps)
-        else:  # random spawn cars for trainning
+        else:  # random spawn cars
             num_npcs = 0
-            expect_num_npcs = np.random.randint(6, 13)  # np.random.randint(4, 9)6, 13
+            expect_num_npcs = np.random.randint(4, 9)  # np.random.randint(6, 13)
             while num_npcs < expect_num_npcs:
                 x = np.random.randint(3)
                 y = np.random.randint(self.index-40, self.index+180)
                 num_npcs += spawn_npc(x, y, multi_wps)
 
         self.world.tick()
+        self.actor_dic = []
         # npc speed
         if self.scenario in self.test_scenario:
             for i in range(len(self.actor_list)):
@@ -499,14 +504,21 @@ class CarlaEnv(gym.Env):
                 actor_speed_limit = actor.get_speed_limit()
                 percentage_v_dif = (1.0 - self.speed_refer_dic[actor_speed] / actor_speed_limit) * 100
                 self.traffic_manager.vehicle_percentage_speed_difference(actor, percentage_v_dif)
+                dis_to_lead = BP_LOOKAHEAD_BASE + BP_LOOKAHEAD_TIME * actor_speed / 3.6
+                dic = {'id':actor.id, 'target speed': actor_speed, 'desired gap': dis_to_lead}
+                self.actor_dic.append(dic)
         else:
             for actor in self.actor_list:
                 actor.set_autopilot(True, self.port+6000)
+                self.traffic_manager.auto_lane_change(actor, False)
                 dis_to_lead = np.random.randint(15)
                 self.traffic_manager.distance_to_leading_vehicle(actor, dis_to_lead)
                 actor_speed_limit = actor.get_speed_limit()
-                percentage_v_dif = (1.0 - np.random.randint(11, 54) / actor_speed_limit) * 100
+                target_speed = np.random.randint(11, 54)
+                percentage_v_dif = (1.0 - target_speed / actor_speed_limit) * 100
                 self.traffic_manager.vehicle_percentage_speed_difference(actor, percentage_v_dif)
+                dic = {'id':actor.id, 'target speed': target_speed, 'desired gap': dis_to_lead}
+                self.actor_dic.append(dic)
 
         self.world.tick()
         if self.scenario == 5:
@@ -520,12 +532,16 @@ class CarlaEnv(gym.Env):
                 self.multi_waypoints = self.multi_waypoints[:, :self.index + lane_length]
         else:
             print("number of other cars: {}, scenario: {}".format(num_npcs, self.scenario))
-            for _ in range(30):
+            self.multi_waypoints = self.multi_waypoints[:, :self.index + 400]
+            for _ in range(10):
                 self.step_one_loop(0)
         self.count_frame_time = 0
         self.count_step = 0
         self.scenario_start = True
-        if self.scenario in self.test_scenario and self.recording_enabled:
+        GameTime.on_carla_tick(self.timestamp)
+        self.start_time = GameTime.get_time()
+        self.start_pos = self.hero.get_location().x
+        if self.recording_enabled:  # self.scenario in self.test_scenario and
             self.client.start_recorder(str(self.logdir.resolve()) + f'/{self.test_scen}.log')
         ob, _, done, _ = self.get_state(self.hero)
         if done:
@@ -572,6 +588,8 @@ class CarlaEnv(gym.Env):
         self.lane_change_times = 0
         self.count_step = 0
         self.count_stop = 0
+        self.speed_sum = 0.0
+        self.speed_step = 0
 
         success, trans = self.setup_hero()
         if success:
@@ -670,6 +688,8 @@ class CarlaEnv(gym.Env):
 
     def step(self, action):
         self.count_step += 1
+        if action < -0.001:  # MOBIL policy
+            action = self.change_lane_policy()
         # -------------------------------------------------------------------------------------------
         """ Some rules are added to ensure basic safety (https://arxiv.org/abs/1904.00231). 
         Commet this if you wish. """
@@ -686,7 +706,7 @@ class CarlaEnv(gym.Env):
             actor_lane = -2 - (self.map.get_waypoint(carla.Location(x=actor_x, y=actor_y)).lane_id)
             y_relative = actor_x - ego_x
             front_dis = min(front_dis, y_relative) if (actor_lane == ego_lane and 0 < y_relative) else front_dis
-            behind_condition = (-10 < y_relative < 20) and ((action*(ego_lane-actor_lane)==1 or action*(ego_lane-actor_lane)==-2))
+            behind_condition = (-20 < y_relative < 20) and ((action*(ego_lane-actor_lane)==1 or action*(ego_lane-actor_lane)==-2))
             behind_conditions.append(behind_condition)
 
         if (any(behind_conditions) or front_dis > 60.0) and action != 0:
@@ -935,6 +955,13 @@ class CarlaEnv(gym.Env):
         else:
             sespector_wp = ego_wp
         set_sespector(self.world, sespector_wp.transform, sespector_wp.transform.rotation.yaw)
+        for i, actor in enumerate(self.world.get_actors().filter('vehicle.audi*')):
+            actor_wp = self.get_vehicle_wp(actor)
+            actor_s = actor_wp.s
+            if actor_s > 900:
+                actor.set_autopilot(False, self.port+6000)
+                npc_control = carla.VehicleControl(throttle=0, steer=0, brake=1)
+                actor.apply_control(npc_control)
         self.world.tick()
         return current_speed
 
@@ -990,21 +1017,21 @@ class CarlaEnv(gym.Env):
         done = False
         collision = False
         success = False
-        if self.scenario in self.test_scenario:
-            if abs(ego_lane) > 1:
-                done = True
-            closest_len, closest_index = behavioural_planner.get_closest_index(self._waypoints, [loc.x, loc.y])
-            if closest_index == len(self._waypoints) - 1:
-                done = True
-            if dis_to_goal < 2.5:
-                done = True
-            if target_speed < 0.40 and speed < 0.05:
-                done = True
-            if self.count_stop >= 30:
-                done = True
-        else:
-            if self.count_step >= 200:
-                done = True
+        # if self.scenario in self.test_scenario:
+        if abs(ego_lane) > 1:
+            done = True
+        closest_len, closest_index = behavioural_planner.get_closest_index(self._waypoints, [loc.x, loc.y])
+        if closest_index == len(self._waypoints) - 1:
+            done = True
+        if dis_to_goal < 2.5:
+            done = True
+        if target_speed < 0.40 and speed < 0.05:
+            done = True
+        if self.count_stop >= 30:
+            done = True
+        # else:
+        #     if self.count_step >= 200:
+        #         done = True
             
         self.run_traffic_light = False
 
@@ -1012,13 +1039,13 @@ class CarlaEnv(gym.Env):
             if len(self.sensor.history) > 0:
                 collision = True
                 self.collision_condition_list.append([self.scenario, self.test_scen])
-                if self.recording_enabled:
+                if (self.scenario in self.test_scenario) and self.recording_enabled:
                     with (self.logdir.parent / 'collision.jsonl').open('a') as f:
                         f.write(json.dumps({'scenario': self.scenario, 'index': self.test_scen,
                                             'parameters': self.scen_refer_dic[self.test_scen]}) + '\n')
                 self.collsion_num += 1
-                if self.scenario in self.test_scenario:
-                    done = True
+                # if self.scenario in self.test_scenario:
+                done = True
         if self.collision_his != len(self.sensor.history):
             self.collision_times += 1
             self.collision_his = len(self.sensor.history)
@@ -1028,14 +1055,14 @@ class CarlaEnv(gym.Env):
             self.success_num +=1
         if done and (not success) and (not collision):
             self.change_failure_condition_list.append([self.scenario, self.test_scen])
-            if self.recording_enabled:
+            if (self.scenario in self.test_scenario) and self.recording_enabled:
                 with (self.logdir.parent / 'fail.jsonl').open('a') as f:
                     f.write(json.dumps({'scenario': self.scenario, 'index': self.test_scen,
                                         'parameters': self.scen_refer_dic[self.test_scen]}) + '\n')
             self.change_failure_num += 1
         if done and self.max_acc >= 2.0:
             self.acc_condition_list.append([self.scenario, self.test_scen])
-            if self.recording_enabled:
+            if (self.scenario in self.test_scenario) and self.recording_enabled:
                 with (self.logdir.parent / 'exceed_acc.jsonl').open('a') as f:
                     f.write(json.dumps({'scenario': self.scenario, 'index': self.test_scen,
                                         'parameters': self.scen_refer_dic[self.test_scen],
@@ -1045,38 +1072,64 @@ class CarlaEnv(gym.Env):
 
         self.speed_sum += current_speed
         self.speed_step += 1
+        if done:
+            GameTime.on_carla_tick(self.timestamp)
+            self.end_time = GameTime.get_time()
 
         info = {
-            "success": success,
-            "max acc": round(self.max_acc, 3),
-            "collision": collision,
-            'ttc': round(self.ttc, 3),
+            'index': self.test_scen,
+            'success': success,
+            'max acc': round(self.max_acc, 3),
+            'collision': collision,
+            # 'ttc': round(self.ttc, 3),
             'min ttc': round(self.min_ttc, 3),
             'min dis': round(self.min_dis, 3),
             'lane change times': self.lane_change_times,
-            # "collision times": self.collision_times,
-            # "steps": self.count_step,
-            # "frames": self.count_frame_time,
-            "success, collision, fail and exceed acc": [self.success_num, self.collsion_num, 
+            # 'collision times': self.collision_times,
+            'steps': self.count_step,
+            'frames': self.count_frame_time,
+            'average speed': self.speed_sum / self.speed_step,
+            'success, collision, fail and exceed acc': [self.success_num, self.collsion_num, 
                                                         self.change_failure_num, self.exceed_acc_num]
         }
         if done:
-            print(info)
-            if self.recording_enabled:
+            print(info, f'episode time: {self.end_time - self.start_time}', f'length: {loc.x - self.start_pos}')
+            if (self.scenario in self.test_scenario) and self.recording_enabled:
                 with (self.logdir.parent / 'test_result.jsonl').open('a') as f:
-                    f.write(json.dumps({'scenario': self.scenario, 
-                                        'scen index': self.test_scen, 
-                                        'scen parameters': self.scen_refer_dic[self.test_scen], 
+                    f.write(json.dumps({'scenario': self.scenario,
+                                        'scen index': self.test_scen,
+                                        'scen parameters': self.scen_refer_dic[self.test_scen],
                                         'success': success,
                                         'max acc': self.max_acc,
                                         'collision': collision,
-                                        'ttc': self.ttc,
                                         'min ttc': self.min_ttc,
                                         'min dis': self.min_dis,
                                         'lane change times': self.lane_change_times,
+                                        'steps': self.count_step,
+                                        'frames': self.count_frame_time,
+                                        'average speed': self.speed_sum / self.speed_step,
                                         # 'collision scenarios': self.collision_condition_list, 
                                         # 'change fail scenarios': self.change_failure_condition_list, 
                                         # 'exceed acc scenarios': self.acc_condition_list
+                                        }) + '\n')
+            elif self.recording_enabled:
+                with (self.logdir.parent / 'test_result.jsonl').open('a') as f:
+                    f.write(json.dumps({'scenario': self.scenario,
+                                        'num of cars': len(self.actor_list),
+                                        'index': self.test_scen,
+                                        'success': success,
+                                        'max acc': self.max_acc,
+                                        'collision': collision,
+                                        'min ttc': self.min_ttc,
+                                        'min dis': self.min_dis,
+                                        'lane change times': self.lane_change_times,
+                                        'steps': self.count_step,
+                                        'frames': self.count_frame_time,
+                                        'start time': self.start_time,
+                                        'end time': self.end_time,
+                                        'episode time': self.end_time - self.start_time,
+                                        'length': loc.x - self.start_pos,
+                                        'average speed': self.speed_sum / self.speed_step,
                                         }) + '\n')
             self.destroy()
             if self.scenario in self.test_scenario and self.recording_enabled:
@@ -1156,6 +1209,94 @@ class CarlaEnv(gym.Env):
             waypoints.append([waypoint.location.x, waypoint.location.y, DESIRE_SPEED])
         return waypoints
 
+    def change_lane_policy(self):
+        ego_wp = self.get_vehicle_wp(self.hero)
+        ego_lane = ego_wp.lane_id
+        ego_s = ego_wp.s
+        # decide to make a lane change
+        action = 0
+        lane_index = ego_lane - 1
+        if lane_index in [-2, -3, -4]:
+            # Does the MOBIL model recommend a lane change?
+            if self.mobil(lane_index, ego_s, ego_lane):
+                action = 2
+        lane_index = ego_lane + 1
+        if lane_index in [-2, -3, -4]:
+            # Does the MOBIL model recommend a lane change?
+            if self.mobil(lane_index, ego_s, ego_lane):
+                action = 1
+        return action
+
+    def mobil(self, lane_index, ego_s, ego_lane):
+        d_preceding = np.Inf
+        d_following = np.Inf
+        new_preceding = None
+        new_following = None
+        old_d_preceding = np.Inf
+        old_d_following = np.Inf
+        old_preceding = None
+        old_following = None
+        for i, actor in enumerate(self.world.get_actors().filter('vehicle.audi*')):
+            actor_wp = self.get_vehicle_wp(actor)
+            actor_lane = actor_wp.lane_id
+            actor_s = actor_wp.s
+            if actor_lane == lane_index:
+                if actor_s >= ego_s and actor_s - ego_s < d_preceding:
+                    d_preceding = actor_s - ego_s
+                    new_preceding = actor
+                if actor_s < ego_s and ego_s - actor_s < d_following:
+                    d_following = ego_s - actor_s
+                    new_following = actor
+            elif actor_lane == ego_lane:
+                if actor_s >= ego_s and actor_s - ego_s < old_d_preceding:
+                    old_d_preceding = actor_s - ego_s
+                    old_preceding = actor
+                if actor_s < ego_s and ego_s - actor_s < old_d_following:
+                    old_d_following = ego_s - actor_s
+                    old_following = actor
+        if (d_preceding <= 20 or d_following <= 20):
+            return False
+        new_following_a = self.acceleration(ego_vehicle=new_following, front_vehicle=new_preceding)
+        new_following_pred_a = self.acceleration(ego_vehicle=new_following, front_vehicle=self.hero)
+        new_preceding_pred_a = self.acceleration(ego_vehicle=self.hero, front_vehicle=new_preceding)
+        if new_following_pred_a < -A_MAX or new_preceding_pred_a < -A_MAX:
+            return False
+
+        # Is there an acceleration advantage for me and/or my followers to change lane?
+        self_a = self.acceleration(ego_vehicle=self.hero, front_vehicle=old_preceding)
+        old_following_a = self.acceleration(ego_vehicle=old_following, front_vehicle=self.hero)
+        old_following_pred_a = self.acceleration(ego_vehicle=old_following, front_vehicle=old_preceding)
+        jerk = new_preceding_pred_a - self_a + 0. * (new_following_pred_a - new_following_a
+                                                             + old_following_pred_a - old_following_a)
+        if jerk < 0.2:
+            return False
+
+        return True
+
+    def acceleration(self, ego_vehicle, front_vehicle):
+        if ego_vehicle is None or front_vehicle is None:
+            return 0
+        v_xy = ego_vehicle.get_velocity()
+        current_speed = math.sqrt(v_xy.x ** 2 + v_xy.y ** 2 + v_xy.z ** 2)
+        ego_target_speed = DESIRE_SPEED
+        ego_desired_gap = BP_LOOKAHEAD_BASE + BP_LOOKAHEAD_TIME * current_speed
+        for dic in self.actor_dic:
+            if dic['id'] == ego_vehicle.id:
+                ego_target_speed = dic['target speed']
+                ego_desired_gap = dic['desired gap']
+        acceleration = 1.5 * (
+                1 - np.power(max(current_speed, 0) / (ego_target_speed+1e-5), 4.0))
+
+        if front_vehicle:
+            front_vehicle_wp = self.get_vehicle_wp(front_vehicle)
+            front_vehicle_s = front_vehicle_wp.s
+            ego_vehicle_wp = self.get_vehicle_wp(ego_vehicle)
+            ego_vehicle_s = ego_vehicle_wp.s
+            d = front_vehicle_s - ego_vehicle_s
+            acceleration -= 1.5 * \
+                np.power(ego_desired_gap / (d+1e-5), 2)
+        return acceleration
+
 
 class PlayGame(object):
     def __init__(self):
@@ -1204,3 +1345,58 @@ class PlayGame(object):
             traceback.print_exc()
             print("Setup world failed")
             return None, None
+
+    @staticmethod
+    def replay(directory, scen=0, port=3000):
+        host='localhost'
+        client = carla.Client(host, port)
+        client.set_timeout(30.0)
+        world = client.get_world()
+        settings = world.get_settings()
+        settings.synchronous_mode = False
+        settings.no_rendering_mode = False
+        settings.fixed_delta_seconds = 0.05
+        world.apply_settings(settings)
+        world.wait_for_tick()
+        world = client.load_world('highway')
+        world.wait_for_tick()
+        world.set_weather(carla.WeatherParameters.ClearNoon)  # ClearNoon, ClearSunset, etc.
+        world.wait_for_tick()
+
+        file = directory+"/carla_log/{}.log".format(scen)
+        info = client.show_recorder_file_info(file, False)
+        index_end = info.index(': vehicle.lincoln.mkz2017')
+        index_begin = index_end - 1
+        while info[index_begin] in [str(i) for i in range(10)]:
+            index_begin -= 1
+        ego = int(info[index_begin:index_end])
+        client.replay_file(file, 0, 0, ego)
+        world.wait_for_tick()
+        while world.get_actors().filter('vehicle.lincoln.mkz2017'):
+            ego = world.get_actors().filter('vehicle.lincoln.mkz2017')[0]
+            world.wait_for_tick()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dir', type=str, required=True, help='Directory of test results')
+    parser.add_argument('--scen', type=int, default=0, help='Test scenario index')
+    parser.add_argument('--port', type=int, default=2000, help='CARLA client port')
+    args = parser.parse_args()
+    try:
+        play_game = PlayGame()
+        play_game.replay(args.dir, args.scen, args.port)
+    except KeyboardInterrupt:
+        print('\nCancelled by user. Bye!')
+    except Exception:
+        traceback.print_exc()
+    finally:
+        if play_game is not None:
+            if play_game.env is not None:
+                print("destroy last time")
+                play_game.env.destroy()
+            del play_game
+
+
+if __name__ == '__main__':
+    main()
